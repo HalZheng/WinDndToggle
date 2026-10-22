@@ -1,11 +1,21 @@
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 namespace WinDndToggle;
+
+/// <summary>界面语言：中文系统显示中文，其他一律英文。就十几条字符串，不值得上 resx。</summary>
+internal static class Res
+{
+    private static readonly bool Zh = CultureInfo.CurrentUICulture.Name.StartsWith("zh", StringComparison.OrdinalIgnoreCase);
+
+    public static string Tr(string zh, string en) => Zh ? zh : en;
+}
 
 internal sealed class TrayContext : ApplicationContext
 {
@@ -20,7 +30,8 @@ internal sealed class TrayContext : ApplicationContext
     private readonly Icon _iconOn = IconFactory.Build(Color.FromArgb(139, 92, 246), badge: true);
     private readonly Icon _iconOff = IconFactory.Build(Color.FromArgb(148, 163, 184), badge: false);
 
-    private string _hotkeyText;
+    private string _hotkeyText;      // 菜单里显示的，可能带 "(已被占用)" 之类的后缀
+    private string _hotkeyRawText;   // 不带后缀的原始配置，重新注册时要靠它
     private uint _hotkeyMods;
     private uint _hotkeyVk;
     private bool _hotkeyRegistered;
@@ -33,22 +44,55 @@ internal sealed class TrayContext : ApplicationContext
     {
         QuietHours.EnsureCom();
 
-        _hotkeyText = LoadHotkeyText(args);
+        // exe 挪过位置的话，Run 键里的旧路径会让开机自启静默失效，启动时顺手修好
+        Autostart.RepairIfNeeded();
+
+        _hotkeyRawText = _hotkeyText = LoadHotkeyText(args);
 
         _statusItem = new ToolStripMenuItem { Enabled = false };
         _toggleItem = new ToolStripMenuItem();
         _toggleItem.Click += (_, _) => Toggle();
 
-        var recheckItem = new ToolStripMenuItem("重新检测");
+        var recheckItem = new ToolStripMenuItem(Res.Tr("重新检测", "Recheck"));
         recheckItem.Click += (_, _) => Recheck();
+
+        var autostartItem = new ToolStripMenuItem(Res.Tr("开机自启", "Run at startup"))
+        {
+            CheckOnClick = true,
+            Checked = Autostart.IsEnabled(),
+        };
+        autostartItem.Click += (_, _) =>
+        {
+            bool enable = autostartItem.Checked;
+            if (Autostart.SetEnabled(enable, out string error))
+            {
+                ShowBalloon(Res.Tr("已开启开机自启", "Run at startup: on"),
+                    Res.Tr("登录 Windows 后会自动启动。", "The app will start with Windows."),
+                    ToolTipIcon.Info);
+            }
+            else
+            {
+                // 写注册表失败就回滚勾选，别让菜单状态和实际不一致
+                autostartItem.Checked = !enable;
+                ShowBalloon(Res.Tr("开机自启修改失败", "Failed to change startup setting"),
+                    error, ToolTipIcon.Warning);
+            }
+        };
+
+        var hotkeyItem = new ToolStripMenuItem(Res.Tr("更换热键...", "Change hotkey..."));
+        hotkeyItem.Click += (_, _) => ChangeHotkey();
 
         var menu = new ContextMenuStrip();
         menu.Items.Add(_statusItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_toggleItem);
         menu.Items.Add(recheckItem);
+        menu.Items.Add(autostartItem);
+        menu.Items.Add(hotkeyItem);
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(new ToolStripMenuItem("退出", null, (_, _) => ExitApp()));
+        menu.Items.Add(new ToolStripMenuItem(Res.Tr("退出", "Exit"), null, (_, _) => ExitApp()));
+        // 每次弹出菜单时重读一下，跟上外部改动（比如任务管理器那边删了自启项）
+        menu.Opening += (_, _) => autostartItem.Checked = Autostart.IsEnabled();
 
         _tray = new NotifyIcon
         {
@@ -72,8 +116,9 @@ internal sealed class TrayContext : ApplicationContext
         {
             _warned = true;
             InfoDialog.Show("WinDndToggle",
-                "这台机器上用不了。\n\n" + _lastError +
-                "\n\n程序会留在托盘里，右键菜单里可以「重新检测」。");
+                Res.Tr("这台机器上用不了。\n\n", "Not available on this machine.\n\n") + _lastError +
+                Res.Tr("\n\n程序会留在托盘里，右键菜单里可以「重新检测」。",
+                       "\n\nThe app stays in the tray; use \"Recheck\" in the context menu to try again."));
         }
 
         // 别的入口（Win+N 铃铛、设置页、计划专注）改了状态时，图标要跟上
@@ -109,26 +154,26 @@ internal sealed class TrayContext : ApplicationContext
         if (!_usable)
         {
             _tray.Icon = _iconOff;
-            _tray.Text = "勿扰：不可用";
-            _statusItem.Text = "勿扰：不可用";
-            _toggleItem.Text = "切换勿扰";
+            _tray.Text = Res.Tr("勿扰：不可用", "DND: unavailable");
+            _statusItem.Text = Res.Tr("勿扰：不可用", "DND: unavailable");
+            _toggleItem.Text = Res.Tr("切换勿扰", "Toggle DND");
             _toggleItem.Enabled = false;
             return;
         }
 
         string text = _state switch
         {
-            DndState.Off => "勿扰：已关闭",
-            DndState.PriorityOnly => "勿扰：已开启（仅优先事项）",
-            DndState.AlarmsOnly => "勿扰：已开启（仅闹钟）",
-            _ => "勿扰：状态未知",
+            DndState.Off => Res.Tr("勿扰：已关闭", "DND: off"),
+            DndState.PriorityOnly => Res.Tr("勿扰：已开启（仅优先事项）", "DND: on (priority only)"),
+            DndState.AlarmsOnly => Res.Tr("勿扰：已开启（仅闹钟）", "DND: on (alarms only)"),
+            _ => Res.Tr("勿扰：状态未知", "DND: unknown"),
         };
 
         bool on = _state is DndState.PriorityOnly or DndState.AlarmsOnly;
         _tray.Icon = on ? _iconOn : _iconOff;
         _tray.Text = text.Length > 63 ? text.Substring(0, 63) : text;
         _statusItem.Text = text;
-        _toggleItem.Text = on ? "关闭勿扰" : "开启勿扰";
+        _toggleItem.Text = on ? Res.Tr("关闭勿扰", "Turn DND off") : Res.Tr("开启勿扰", "Turn DND on");
         _toggleItem.Enabled = true;
     }
 
@@ -139,11 +184,11 @@ internal sealed class TrayContext : ApplicationContext
             if (!_warned)
             {
                 _warned = true;
-                InfoDialog.Show("WinDndToggle", "切换失败：\n\n" + _lastError);
+                InfoDialog.Show("WinDndToggle", Res.Tr("切换失败：\n\n", "Toggle failed:\n\n") + _lastError);
             }
             else
             {
-                ShowBalloon("切换失败", _lastError, ToolTipIcon.Warning);
+                ShowBalloon(Res.Tr("切换失败", "Toggle failed"), _lastError, ToolTipIcon.Warning);
             }
 
             return;
@@ -151,7 +196,7 @@ internal sealed class TrayContext : ApplicationContext
 
         if (!QuietHours.TryToggle(out DndState state, out string error))
         {
-            ShowBalloon("切换失败", error, ToolTipIcon.Warning);
+            ShowBalloon(Res.Tr("切换失败", "Toggle failed"), error, ToolTipIcon.Warning);
             Refresh();
             return;
         }
@@ -161,17 +206,100 @@ internal sealed class TrayContext : ApplicationContext
         Apply();
 
         bool on = state is DndState.PriorityOnly or DndState.AlarmsOnly;
-        ShowBalloon(on ? "勿扰已开启" : "勿扰已关闭",
-            on ? "通知会先攒着，不弹出来了。" : "通知恢复正常弹出。",
+        ShowBalloon(on ? Res.Tr("勿扰已开启", "DND is on") : Res.Tr("勿扰已关闭", "DND is off"),
+            on ? Res.Tr("通知会先攒着，不弹出来了。", "Notifications will be held silently.")
+               : Res.Tr("通知恢复正常弹出。", "Notifications will pop up normally."),
             ToolTipIcon.Info);
     }
 
     private void Recheck()
     {
         bool ok = Refresh();
-        ShowBalloon("重新检测完成",
-            ok ? "读写正常，当前：" + _statusItem.Text : _lastError,
+        ShowBalloon(Res.Tr("重新检测完成", "Recheck done"),
+            ok ? Res.Tr("读写正常，当前：", "Read/write OK, current: ") + _statusItem.Text : _lastError,
             ok ? ToolTipIcon.Info : ToolTipIcon.Warning);
+    }
+
+    /// <summary>
+    /// 弹对话框收一个新的组合键。真正的冲突检测就是注册这一步：
+    /// 注册失败（被别的程序占用）就恢复旧热键，菜单显示保持一致。
+    /// </summary>
+    private void ChangeHotkey()
+    {
+        // 对话框开着的时候先把当前热键放掉：不然按下的组合如果正好是当前热键，
+        // 会被全局热键截走直接触发切换，对话框永远凑不齐按键（实测踩过）
+        if (_hotkeyRegistered)
+        {
+            if (!HotkeyApi.UnregisterHotKey(_hotkeyWindow.Handle, HotkeyId))
+            {
+                ShowBalloon(Res.Tr("更换热键失败", "Hotkey change failed"),
+                    Res.Tr("无法释放当前热键，操作已取消。", "Could not release the current hotkey; operation cancelled."),
+                    ToolTipIcon.Warning);
+                return;
+            }
+
+            _hotkeyRegistered = false;
+        }
+
+        bool changed = false;
+        try
+        {
+            using var dlg = new HotkeyDialog(_hotkeyRawText);
+            if (dlg.ShowDialog() == DialogResult.OK && dlg.Result is not null)
+            {
+                string text = dlg.Result;
+                if (!HotkeyParser.TryParse(text, out uint mods, out uint vk))
+                {
+                    ShowBalloon(Res.Tr("更换热键失败", "Hotkey change failed"),
+                        Res.Tr("无法解析这个组合键。", "That combination could not be parsed."),
+                        ToolTipIcon.Warning);
+                }
+                else if (!RegisterSingle(mods, vk))
+                {
+                    ShowBalloon(Res.Tr("热键已被占用", "Hotkey already in use"),
+                        Res.Tr("这个组合键被其他程序占用了，原来的热键保持不变。",
+                               "That combination is taken by another app. Your previous hotkey is unchanged."),
+                        ToolTipIcon.Warning);
+                }
+                else
+                {
+                    _hotkeyMods = mods;
+                    _hotkeyVk = vk;
+                    _hotkeyRawText = text;
+                    _hotkeyText = text;
+                    _toggleItem.ShortcutKeyDisplayString = _hotkeyText;
+                    changed = true;
+
+                    if (SaveHotkeyToRegistry(text))
+                    {
+                        ShowBalloon(Res.Tr("热键已更换", "Hotkey changed"), text, ToolTipIcon.Info);
+                    }
+                    else
+                    {
+                        ShowBalloon(Res.Tr("热键已更换", "Hotkey changed"),
+                            Res.Tr("本次运行已生效，但写入注册表失败，下次启动会回到旧热键。",
+                                   "Active for this session, but saving to the registry failed; the old hotkey returns next launch."),
+                            ToolTipIcon.Warning);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            if (changed)
+            {
+                _hotkeyRegistered = true;
+            }
+            else
+            {
+                // 取消或失败：把旧热键装回去。RegisterSingle 会先清同 id 的条目再注册，
+                // 就算之前有叠加的残留也会一起清掉
+                if (HotkeyParser.TryParse(_hotkeyRawText, out uint om, out uint ov))
+                {
+                    _hotkeyRegistered = RegisterSingle(om, ov);
+                }
+            }
+        }
     }
 
     private void ShowBalloon(string title, string text, ToolTipIcon icon)
@@ -182,20 +310,35 @@ internal sealed class TrayContext : ApplicationContext
         _tray.ShowBalloonTip(2500);
     }
 
+    /// <summary>
+    /// 同一个 (hWnd, id) 在 Windows 里注册不同组合会「追加」而不是替换（实测两个组合会同时生效），
+    /// 所以每次注册前先清掉同 id 的旧条目，保证系统里至多挂着一个组合。
+    /// </summary>
+    private bool RegisterSingle(uint mods, uint vk)
+    {
+        HotkeyApi.UnregisterHotKey(_hotkeyWindow.Handle, HotkeyId);
+        return HotkeyApi.RegisterHotKey(_hotkeyWindow.Handle, HotkeyId, mods | HotkeyApi.MOD_NOREPEAT, vk);
+    }
+
     private void RegisterHotkey()
     {
         if (!HotkeyParser.TryParse(_hotkeyText, out _hotkeyMods, out _hotkeyVk))
         {
-            _hotkeyText = "(配置无效)";
+            _hotkeyText = _hotkeyRawText + " " + Res.Tr("(配置无效)", "(invalid config)");
             return;
         }
 
-        _hotkeyRegistered = HotkeyApi.RegisterHotKey(
-            _hotkeyWindow.Handle, HotkeyId, _hotkeyMods | HotkeyApi.MOD_NOREPEAT, _hotkeyVk);
+        _hotkeyRegistered = RegisterSingle(_hotkeyMods, _hotkeyVk);
 
         if (!_hotkeyRegistered)
         {
-            _hotkeyText += " (已被占用)";
+            _hotkeyText = _hotkeyRawText + " " + Res.Tr("(已被占用)", "(already in use)");
+            // 默认键被别的程序占是首次用户的常见情况，光在菜单里标个小字不够，主动说一声
+            ShowBalloon(Res.Tr("热键不可用", "Hotkey unavailable"),
+                Res.Tr("{0} 已被其他程序占用，热键没有生效。右键托盘图标，用「更换热键...」换一个组合。",
+                       "{0} is taken by another app, so the hotkey is inactive. Right-click the tray icon and use \"Change hotkey...\" to pick another.")
+                    .Replace("{0}", _hotkeyRawText),
+                ToolTipIcon.Warning);
         }
     }
 
@@ -219,6 +362,37 @@ internal sealed class TrayContext : ApplicationContext
 
     private const string DefaultHotkey = "Ctrl+Alt+D";
 
+    // GUI 换热键后存这里；优先级：命令行参数 > config.json > 注册表 > 默认
+    private const string SettingsKeyPath = @"Software\WinDndToggle";
+    private const string HotkeyValueName = "Hotkey";
+
+    private static string? LoadHotkeyFromRegistry()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(SettingsKeyPath);
+            return key?.GetValue(HotkeyValueName) as string;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool SaveHotkeyToRegistry(string text)
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.CreateSubKey(SettingsKeyPath);
+            key.SetValue(HotkeyValueName, text, RegistryValueKind.String);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static string LoadHotkeyText(string[] args)
     {
         for (int i = 0; i < args.Length - 1; i++)
@@ -231,24 +405,27 @@ internal sealed class TrayContext : ApplicationContext
 
         try
         {
-            // 只读不写：程序跑起来不该在磁盘上留任何东西。
-            // 想换热键就自己在这个位置放一个 config，或者用 --hotkey 启动。
+            // 手动配置：只读不写。想固定热键就自己放一个 config（会盖过 GUI 保存的值）。
             string path = Path.Combine(AppContext.BaseDirectory, "WinDndToggle.config.json");
-            if (!File.Exists(path))
+            if (File.Exists(path))
             {
-                return DefaultHotkey;
-            }
-
-            string text = File.ReadAllText(path);
-            string? parsed = ExtractJsonString(text, "hotkey");
-            if (!string.IsNullOrWhiteSpace(parsed))
-            {
-                return parsed!;
+                string? parsed = ExtractJsonString(File.ReadAllText(path), "hotkey");
+                if (!string.IsNullOrWhiteSpace(parsed))
+                {
+                    return parsed!;
+                }
             }
         }
         catch
         {
             // 配置坏了不该让程序起不来
+        }
+
+        // GUI 里保存过的热键
+        string? saved = LoadHotkeyFromRegistry();
+        if (!string.IsNullOrWhiteSpace(saved))
+        {
+            return saved!;
         }
 
         return DefaultHotkey;
@@ -396,6 +573,77 @@ internal static class HotkeyParser
         }
 
         return vk != 0 && modifiers != 0;
+    }
+}
+
+/// <summary>
+/// 开机自启：HKCU 的 Run 键（Software\Microsoft\Windows\CurrentVersion\Run）。
+/// 不用管理员权限，任务管理器的「启动应用」里也能看到、能禁用。
+/// </summary>
+internal static class Autostart
+{
+    private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    private const string ValueName = "WinDndToggle";
+
+    public static bool IsEnabled()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath);
+            return key?.GetValue(ValueName) is string v && v.Length > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>exe 挪过位置的话，Run 键还指着旧路径，开机自启会静默失效。启动时把路径修成当前的。</summary>
+    public static void RepairIfNeeded()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: true);
+            if (key?.GetValue(ValueName) is not string v || v.Length == 0)
+            {
+                return;
+            }
+
+            string current = "\"" + Application.ExecutablePath + "\"";
+            if (!string.Equals(v, current, StringComparison.OrdinalIgnoreCase))
+            {
+                key.SetValue(ValueName, current, RegistryValueKind.String);
+            }
+        }
+        catch
+        {
+            // 修不了就算了，别影响正常启动
+        }
+    }
+
+    public static bool SetEnabled(bool enable, out string error)
+    {
+        error = "";
+        try
+        {
+            using var key = Registry.CurrentUser.CreateSubKey(RunKeyPath, writable: true);
+            if (enable)
+            {
+                // 路径带引号，含空格的目录不会被拆开
+                key.SetValue(ValueName, "\"" + Application.ExecutablePath + "\"", RegistryValueKind.String);
+            }
+            else
+            {
+                key.DeleteValue(ValueName, throwOnMissingValue: false);
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
     }
 }
 

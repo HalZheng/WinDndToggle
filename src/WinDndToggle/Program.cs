@@ -28,7 +28,9 @@ internal static class Program
         using var mutex = new Mutex(true, MutexName, out bool isFirst);
         if (!isFirst)
         {
-            MessageBox.Show("勿扰开关已经在运行了，看任务栏托盘图标。", "WinDndToggle",
+            MessageBox.Show(
+                Res.Tr("勿扰开关已经在运行了，看任务栏托盘图标。", "WinDndToggle is already running — check the tray icons."),
+                "WinDndToggle",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }

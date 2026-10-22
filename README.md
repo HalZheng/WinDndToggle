@@ -6,8 +6,8 @@
 
 | 文件 | 大小 | 运行环境 |
 |---|---|---|
-| `dist\WinDndToggle.exe` | 22 KB | 只要 Windows 自带的 .NET Framework 4.8，**拷过去双击就能跑** |
-| `dist\net8\WinDndToggle.exe` | 178 KB | 需要装 .NET 8 Desktop Runtime (x64) |
+| `dist\WinDndToggle.exe` | 31 KB | 只要 Windows 自带的 .NET Framework 4.8，**拷过去双击就能跑** |
+| `dist\net8\WinDndToggle.exe` | 183 KB | 需要装 .NET 8 Desktop Runtime (x64) |
 
 推荐第一个。Win10 1903 之后和 Win11 都自带 .NET Framework 4.8，等于零依赖。
 
@@ -23,11 +23,11 @@
 
 ## 怎么保证别人能直接跑
 
-1. 直接把 `dist\WinDndToggle.exe`（22 KB）发过去，双击。就这一步。
-2. **全程只有一个 exe**：不生成配置文件、不写注册表、不装服务、不留缓存。跑起来和退出后目录里都只有那一个 exe（实测验证过）。
+1. 直接把 `dist\WinDndToggle.exe`（31 KB）发过去，双击。就这一步。
+2. **全程只有一个 exe**：不生成配置文件、不写注册表、不装服务、不留缓存。仅有的例外都是你在托盘菜单里主动操作的产物，取消操作就还原：勾选「开机自启」写一个 HKCU Run 键；在菜单里换热键写一个 `HKCU\Software\WinDndToggle` 值。跑起来和退出后目录里都只有那一个 exe（实测验证过）。
 3. 我做的验证：把这个 exe 单独拷到一个空目录，里面什么都没有，`--probe` 正常运行；反射检查引用的程序集全部是 .NET Framework 自带的。
 4. 位数：AnyCPU，32 位和 64 位 Windows 都能跑，ARM64 的 Windows 走 x64 兼容层也能跑。
-5. 开机自启：让对方把 exe 的快捷方式丢进 `shell:startup`。这是唯一需要外部动作的地方，但也不产生文件。
+5. 开机自启：托盘右键菜单勾选「开机自启」（写的是 HKCU 的 Run 注册表键，不用管理员权限），或者手动把 exe 的快捷方式丢进 `shell:startup`。
 6. 唯一的例外：Win10 1809 及更早的机器可能没装 4.8（1809 自带 4.7.2）。这种情况让他装一次 .NET Framework 4.8 离线包，或者改用 `dist\net8\` 那个版本 + .NET 8 Desktop Runtime。
 7. 不放心对方的机器环境？那就发 self-contained 版，约 60 MB，连 .NET 都不用装：
 
@@ -85,8 +85,9 @@ toggle 关 -> payload 00 00 00 00, stamp 0xE2F1
 
 双击 exe，没有主窗口，也不会在磁盘上生成任何文件。
 
-- 托盘图标 **左键** = 切换；**右键** = 状态 / 开关 / 重新检测 / 退出
+- 托盘图标 **左键** = 切换；**右键** = 状态 / 开关 / 重新检测 / 开机自启 / 更换热键 / 退出
 - 全局热键 **Ctrl+Alt+D**
+- 界面语言跟随系统：中文系统显示中文，其他语言显示英文
 - 图标：灰色月亮 = 关，紫色月亮 + 红点 = 开
 - 图标每 3 秒同步一次，你用 Win+N 或设置页改了状态，托盘也会跟上
 
@@ -99,12 +100,15 @@ WinDndToggle.exe --off      关
 WinDndToggle.exe --probe    打印当前状态，可读返回 0，不可读返回 1
 ```
 
-换热键：默认 `Ctrl+Alt+D`。想改的话两种办法，都不会让程序多生成任何文件：
+换热键：默认 `Ctrl+Alt+D`。三种办法，按优先级从高到低：
 
-- 自己往 exe 同目录放一个 `WinDndToggle.config.json`，内容 `{ "hotkey": "Ctrl+Shift+F9" }`。程序**只读不写**，没这个文件就用默认值
-- 或者启动时带参数：`WinDndToggle.exe --hotkey "Ctrl+Alt+Q"`（改快捷方式的命令行即可）
+1. 托盘右键菜单点「更换热键...」，直接按下新组合键（支持 Ctrl/Alt/Shift/Win + 字母/数字/F1-F24）。对话框打开期间当前热键会临时释放（不会误触发），保存到 `HKCU\Software\WinDndToggle`；如果组合键被别的程序占用会明确提示，并保持原热键不变
+2. 自己往 exe 同目录放一个 `WinDndToggle.config.json`，内容 `{ "hotkey": "Ctrl+Shift+F9" }`。程序**只读不写**，放了这个文件就会盖过菜单里保存的热键
+3. 或者启动时带参数：`WinDndToggle.exe --hotkey "Ctrl+Alt+Q"`（改快捷方式的命令行即可），优先级最高
 
-开机自启：把 exe 的快捷方式丢进 `shell:startup`。
+也就是说：命令行参数 > config.json > 菜单里保存的 > 默认值。exe 挪了位置也不怕，开机自启的注册表路径会在下次启动时自动修正。
+
+开机自启：托盘图标右键菜单里勾选「开机自启」即可。写的是 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，普通用户权限、任务管理器的「启动应用」里能看到也能关掉。也可以手动把 exe 的快捷方式丢进 `shell:startup`，两种方式互不影响。
 
 ## 有没有现成的开源项目
 
@@ -119,7 +123,7 @@ WinDndToggle.exe --probe    打印当前状态，可读返回 0，不可读返�
 
 其余的搜索结果基本都是 macOS / Linux 的同名功能（`streamdeck-dnd`、`gnome-dnd-switch` 之类），跟 Windows 无关。
 
-所以结论是：要么用 YASB 这种重家伙，要么自己写。这个项目 22 KB、一个 exe、一个热键，反而是最省事的形态。
+所以结论是：要么用 YASB 这种重家伙，要么自己写。这个项目 31 KB、一个 exe、一个热键，反而是最省事的形态。
 
 ## 风险
 
@@ -148,7 +152,8 @@ dotnet publish src\WinDndToggle\WinDndToggle.csproj -c Release -f net8.0-windows
 ## 代码结构
 
 - `src/WinDndToggle/QuietHours.cs` —— COM 互操作：读 / 写 / 切换。vtable 槽位、字符串所有权、踩过的坑都写在文件头注释里
-- `src/WinDndToggle/TrayContext.cs` —— 托盘、菜单、热键、3 秒轮询、提示框
+- `src/WinDndToggle/TrayContext.cs` —— 托盘、菜单、热键、3 秒轮询、提示框；开机自启（Autostart）和界面文案（Res，中英双语）也在这
+- `src/WinDndToggle/HotkeyDialog.cs` —— 换热键对话框：捕获组合键、实时显示，冲突检测交给注册那一步
 - `src/WinDndToggle/Program.cs` —— 入口、单实例、命令行模式
 - `src/WinDndToggle/app.manifest` —— 高 DPI（PerMonitorV2）声明，net48 靠它
 - `tools/QhProbe/` —— 单独的探针，能直接读 profile 和 WNF 状态，排查用
@@ -162,4 +167,6 @@ dotnet publish src\WinDndToggle\WinDndToggle.csproj -c Release -f net8.0-windows
 - `put_` 的参数是 `LPCWSTR`，直接传 UTF-16 缓冲区，不要封成 BSTR。
 - 用 Python 抓窗口截图前必须 `SetProcessDpiAwareness(2)`，否则坐标被 DPI 虚拟化，会误判成「文字被切掉」。
 - `build.cmd` 里不要写中文：cmd 按控制台代码页解析批处理，UTF-8 中文会把后续命令行拆坏（第一次就栽在这，`net48` 被当成命令执行）。
+- `RegisterHotKey` 在**同一个 (窗口句柄， id)** 上注册**不同**组合会「追加」而不是替换或失败——实测两个组合会同时生效、都能触发。所以注册前必须先 `UnregisterHotKey` 清一次同 id 条目，并且每次都要检查返回值，否则会静默双绑。
+- 换热键的对话框打开期间必须先把当前热键 `UnregisterHotKey` 放掉，关掉再恢复。不然用户在对话框里按下的组合如果正好是当前热键，会被全局热键截走直接触发切换，按键永远凑不齐，表现为「一按就触发、改不回去」。
 
