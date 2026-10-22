@@ -1,0 +1,14 @@
+# Build outputs
+bin/
+obj/
+dist/
+
+# IDE / tooling
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Local AI assistant state
+.workbuddy-ai/

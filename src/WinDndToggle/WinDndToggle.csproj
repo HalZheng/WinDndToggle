@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!--
+      net8.0-windows : 需要机器上装 .NET 8 Desktop Runtime
+      net48          : 用系统自带的 .NET Framework 4.8（Win10 1903+ / Win11 都有），拷过去就能跑
+      两套共用一份源码，只用 WinForms + 手工 COM 互操作，没有第三方依赖。
+    -->
+    <TargetFrameworks>net8.0-windows;net48</TargetFrameworks>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>WinDndToggle</AssemblyName>
+    <RootNamespace>WinDndToggle</RootNamespace>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>2.1.0</Version>
+    <Company>local</Company>
+    <Product>WinDndToggle</Product>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <InvariantGlobalization Condition="'$(TargetFramework)' == 'net8.0-windows'">true</InvariantGlobalization>
+    <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
+    <!-- net8 走 SetHighDpiMode，manifest 里的 DPI 声明是给 net48 用的；两边都声明成 PerMonitorV2，不冲突 -->
+    <NoWarn Condition="'$(TargetFramework)' == 'net8.0-windows'">WFAC010</NoWarn>
+  </PropertyGroup>
+
+</Project>
